@@ -1,0 +1,109 @@
+identity:
+  name: send_monthly_report
+  author: abesticode
+  label:
+    en_US: Send Monthly Report (with charts)
+    zh_Hans: 发送月报（含折线图）
+    pt_BR: Enviar Relatório Mensal (com gráficos)
+    ja_JP: 月次レポート送信（グラフ付き）
+description:
+  human:
+    en_US: Send the IT infrastructure monthly report as an HTML email with embedded trend line charts. The report data (JSON, same structure as REPORT_DATA) is rendered into a static, Outlook-friendly HTML body and the four trend charts (computer total / CPU / memory / storage) are generated as PNG and embedded inline via cid.
+    zh_Hans: 将 IT 基础设施月报以 HTML 邮件发送，趋势折线图以内嵌图片展示。输入月报数据 JSON（结构与 REPORT_DATA 一致），自动渲染为 Outlook 兼容的静态 HTML 正文，并把电脑总数 / CPU / 内存 / 存储四张趋势图生成为 PNG 内嵌到邮件中（cid 方式，经典版 Outlook 可直接显示）。
+    pt_BR: Envie o relatório mensal de infraestrutura de TI como um e-mail HTML com gráficos de linha incorporados.
+    ja_JP: ITインフラ月次レポートを、埋め込みトレンドラインチャート付きのHTMLメールとして送信します。
+  llm: Send the IT infrastructure monthly report as a self-contained HTML email. Input is the report data as JSON (same structure as the REPORT_DATA object). The tool renders a static, Outlook-compatible HTML body and generates the four trend line charts (computer total, CPU, memory, storage) as PNG images embedded inline via cid, so they display directly in classic Outlook.
+parameters:
+  - name: data
+    type: string
+    required: true
+    label:
+      en_US: Report Data (JSON)
+      zh_Hans: 月报数据（JSON）
+      pt_BR: Dados do Relatório (JSON)
+      ja_JP: レポートデータ（JSON）
+    human_description:
+      en_US: The monthly report data as a JSON string, with the same structure as the REPORT_DATA object in the report template.
+      zh_Hans: 月报数据，JSON 字符串格式，结构与报告模板里的 REPORT_DATA 对象一致。
+      pt_BR: Os dados do relatório mensal como uma string JSON, com a mesma estrutura do objeto REPORT_DATA.
+      ja_JP: 月次レポートデータのJSON文字列。レポートテンプレートのREPORT_DATAオブジェクトと同じ構造。
+    llm_description: JSON string of the monthly report data (period, computer, storage, stats, serverUsage, monthlyTrend, networkTop8, risks, summary, footnote, etc.).
+    form: llm
+  - name: send_to
+    type: string
+    required: true
+    label:
+      en_US: Recipient Email
+      zh_Hans: 收件人邮箱
+      pt_BR: E-mail do Destinatário
+      ja_JP: 受信者メール
+    human_description:
+      en_US: The recipient's email address
+      zh_Hans: 收件人的邮箱地址
+      pt_BR: O endereço de e-mail do destinatário
+      ja_JP: 受信者のメールアドレス
+    llm_description: The email address of the recipient. Must be a valid email format (e.g., user@example.com).
+    form: llm
+  - name: subject
+    type: string
+    required: true
+    label:
+      en_US: Email Subject
+      zh_Hans: 邮件主题
+      pt_BR: Assunto do E-mail
+      ja_JP: メール件名
+    human_description:
+      en_US: The subject line of the email
+      zh_Hans: 邮件的主题行
+      pt_BR: A linha de assunto do e-mail
+      ja_JP: メールの件名
+    llm_description: The subject line of the email. Should be concise and descriptive.
+    form: llm
+  - name: reply_to
+    type: string
+    required: false
+    label:
+      en_US: Reply-To Address
+      zh_Hans: 回复地址
+      pt_BR: Endereço de Resposta
+      ja_JP: 返信先アドレス
+    human_description:
+      en_US: Custom reply-to email address
+      zh_Hans: 自定义回复邮件地址
+      pt_BR: Endereço de e-mail personalizado para resposta
+      ja_JP: カスタム返信先メールアドレス
+    llm_description: An optional reply-to email address. When recipients reply to the email, their response will be sent to this address instead of the sender.
+    form: llm
+  - name: cc
+    type: string
+    required: false
+    label:
+      en_US: CC Recipients (JSON list)
+      zh_Hans: 抄送收件人（JSON列表）
+      pt_BR: Destinatários CC (lista JSON)
+      ja_JP: CCの受信者（JSONリスト）
+    human_description:
+      en_US: Carbon copy recipients as JSON array
+      zh_Hans: 抄送收件人，JSON数组格式
+      pt_BR: Destinatários em cópia carbono como array JSON
+      ja_JP: カーボンコピーの受信者（JSON配列）
+    llm_description: A JSON array of email addresses for carbon copy recipients. Example format ["email1@example.com", "email2@example.com"]
+    form: llm
+  - name: bcc
+    type: string
+    required: false
+    label:
+      en_US: BCC Recipients (JSON list)
+      zh_Hans: 密送收件人（JSON列表）
+      pt_BR: Destinatários BCC (lista JSON)
+      ja_JP: BCCの受信者（JSONリスト）
+    human_description:
+      en_US: Blind carbon copy recipients as JSON array
+      zh_Hans: 密送收件人，JSON数组格式
+      pt_BR: Destinatários em cópia oculta como array JSON
+      ja_JP: ブラインドカーボンコピーの受信者（JSON配列）
+    llm_description: A JSON array of email addresses for blind carbon copy recipients. These recipients are hidden from other recipients. Example format ["email1@example.com", "email2@example.com"]
+    form: llm
+extra:
+  python:
+    source: tools/send_monthly_report.py
