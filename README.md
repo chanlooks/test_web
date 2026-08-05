@@ -1,84 +1,174 @@
-# 月报邮件系统 · 最终使用指南
+# 月报邮件系统 · 部署指南 (v0.0.18)
 
-两套东西配合使用，缺一不可：
+两套组件配合使用：
 
-| 交付物 | 作用 | 装在哪 |
-|--------|------|--------|
-| **`langgenius-email_0.0.17.difypkg`**（插件） | 接收数据+图片 → 渲染 HTML → 内嵌图片 → SMTP 发送 | **Dify**（离线也能装，无 Pillow 依赖） |
-| **`report-chart-server-minimal.zip`**（图表服务） | 接收数据 → 用 Pillow 画 8 张图 → 返回 base64 | **那台能装库的生产服务器** |
+| 组件 | 文件 | 装在哪 |
+|------|------|--------|
+| **邮件插件** | `langgenius-email_0.0.18.difypkg` | Dify 平台 |
+| **图表服务** | `standalone_server/` | 一台能装 Pillow 的服务器 |
 
 ---
 
-## 一、部署图表服务（生产服务器）
+## 一、部署图表服务
+
+在一台 **能 pip 装库** 的 Linux/Windows 服务器上：
 
 ```bash
-# 1. 解压
-unzip report-chart-server-minimal.zip
-cd standalone_server
+# 1. 上传 standalone_server/ 整个目录到服务器
+scp -r standalone_server/ user@server:/opt/chart-server/
 
-# 2. 装依赖（这台能装）
+# 2. 安装依赖
+cd /opt/chart-server
 pip install pillow
 
-# 3. 启动（默认 0.0.0.0:8790）
+# 3. 设置 AK（可选，强烈建议生产环境开启）
+export CHART_API_KEY="your-random-secret-key"
+
+# 4. 启动（默认 8790 端口）
 python chart_server.py
+
+# 或指定端口
+PORT=8888 python chart_server.py
 ```
 
 验证：
 ```bash
+# 无 AK 时：
 curl -X POST http://127.0.0.1:8790/make_charts \
      -H "Content-Type: application/json" \
      -d '{"period":"测试","computer":{}}'
-# 返回 {"status":"ok","report":{...},"charts":{"chart_cpu":"<base64>"...}}
+
+# 有 AK 时：
+curl -X POST http://127.0.0.1:8790/make_charts \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer your-random-secret-key" \
+     -d '{"period":"测试","computer":{}}'
+
+# 正常返回：{"status":"ok","report":{...},"charts":{"chart_cpu":"<base64>"...}}
 ```
 
-## 二、装插件 + 配 SMTP（Dify）
+> 建议用 systemd 或 supervisor 做成常驻服务。
 
-1. Dify → 插件 → 本地插件包 → 上传 `langgenius-email_0.0.17.difypkg`
-   - 若提示签名校验失败：按下方「签名」处理
-2. 插件设置里配 SMTP：`smtp_server` / `smtp_port` / `encrypt_method` / **`email_account`（账号）** / **`email_password`（密码）** / `sender_address`
-   - 账号密码必填（官方原版行为）
+---
 
-## 三、Dify 工作流接线（3 个节点）
+## 二、安装插件
+
+### 2.1 上传插件包
+
+Dify → 插件 → 本地插件包 → 上传 `langgenius-email_0.0.18.difypkg`
+
+> 如果提示签名校验失败：Dify 设置里生成插件私钥，用 `dify-plugin plugin package` 重新签名。
+
+### 2.2 配置 SMTP
+
+在插件设置里填：
+
+| 参数 | 说明 |
+|------|------|
+| `smtp_server` | SMTP 服务器地址 |
+| `smtp_port` | 端口（SSL: 465, TLS: 587） |
+| `encrypt_method` | SSL / TLS / NONE |
+| `email_account` | 发件邮箱账号 |
+| `email_password` | 发件邮箱密码 |
+| `sender_address` | 发件人地址（可和账号相同） |
+
+> 如果走内网免认证 SMTP 中继，账号密码留空，只填 `sender_address`。
+
+---
+
+## 三、Dify 工作流接线
+
+打开现有的"基础设施服务月报助手"工作流，**删除"模板转换"节点**，在"条件分支"的 `true` 出口后面接 2 个新节点：
+
+### 节点 1：HTTP 请求（调图表服务）
+
+| 字段 | 值 |
+|------|-----|
+| 方法 | `POST` |
+| URL | `http://<图表服务器IP>:8790/make_charts` |
+| Headers | `Authorization: Bearer <CHART_API_KEY>`（如已配置） |
+| 请求体 | JSON → 选 **LLM 节点** 的 `text` 输出 |
+
+### 节点 2：发送月报（含折线图）
+
+| 参数 | 绑定 |
+|------|------|
+| `data` | HTTP 节点的 `body` 输出 |
+| `send_to` | 收件人邮箱（如 `leader@company.com`） |
+| `subject` | 邮件主题（如 `IT 基础设施资源月报 - 2026年8月`） |
+
+### 最终接线图
 
 ```
-[数据节点 reportjson]
-   ↓
-[HTTP 请求节点]
-   URL:  http://<服务器IP>:8790/make_charts
-   方法: POST
-   请求体: reportjson
-   ↓  得到 {"report":..., "charts":{cid: base64}}
-[发送月报（含折线图）工具]
-   data    = HTTP 节点返回的整个 JSON
-   send_to = 领导邮箱
-   subject = 邮件主题
-   → 插件解码图片 → 渲染 HTML → cid 内嵌 → SMTP 发送
+开始 → 获取当前时间 → 7个API并行 → LLM → 代码校验 → 条件分支
+                                                       ├─ true → HTTP请求(mark_charts) → 发送月报 → 结束
+                                                       └─ false → 结束
 ```
 
-- `data` 带不带 `<REPORT_JSON>` 标签都能解析
-- 不再需要原来的模板转换节点（邮件版 HTML 由插件自己生成）
+> **简化方案**：如果 Dify 服务器能 `pip install pillow`，可以跳过 HTTP 节点。直接把 LLM 的 `text` 输出接到"发送月报"工具的 `data` 参数，插件内置的 Pillow 会自动画图。
 
-## 四、先自测再发领导
+---
 
-1. 先发给自己，用 Outlook 打开确认：图表正常显示、无破图、布局 OK
-2. 确认后再发给领导
+## 四、验证
+
+1. 先发给自己，用 Outlook 打开：图表正常显示、无破图、布局 OK
+2. 确认无误后再发给领导
+
+---
+
+## 五、更新插件（源码修改后重新打包）
+
+如果改了 `plugin_official_src/` 下的源码，需要重新打包：
+
+```bash
+# 方式一：用 Python 直接打包
+python -c "
+import zipfile, os
+src = 'plugin_official_src'
+with zipfile.ZipFile('langgenius-email_0.0.18.difypkg', 'w', zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d != '__pycache__']
+        for f in files:
+            if f in ('.verification.dify.json', 'uv.lock'):
+                continue
+            path = os.path.join(root, f)
+            z.write(path, os.path.relpath(path, src))
+"
+
+# 方式二：用 dify-plugin CLI（需安装 pip install dify-plugin）
+dify-plugin plugin package -p plugin_official_src
+```
+
+### 核心源码文件说明
+
+| 文件 | 作用 |
+|------|------|
+| `tools/charts.py` | Pillow 图表生成（折线图 + 条形图） |
+| `tools/report_render.py` | 邮件 HTML 渲染器（960px 宽度、Outlook 兼容） |
+| `tools/send_monthly_report.py` | 发送月报工具入口 |
+| `tools/send.py` | SMTP 发送核心（支持 cid 内嵌图片） |
+
+图表服务的 `standalone_server/charts.py` 和插件保持一致，改完记得同步替换。
 
 ---
 
 ## 常见问题
 
-**Q: 插件装不上 / 报错？**
-- 签名校验失败 → Dify 设置里生成插件私钥，用 `dify-plugin plugin package -p <源码目录> -k key.pem` 重签再传
-- 其它报错 → 把报错发我
-
-**Q: 图表服务起不来？**
-- 确认 `pip install pillow` 成功
-- 确认端口 8790 没被占用、Dify 能访问该服务器（网络互通）
-
 **Q: 图表显示破图？**
-- 说明 `data` 没接 HTTP 节点输出，或服务器没返回对应 cid 的图。检查 HTTP 节点输出和工具的 data 绑定。
+- 确认 HTTP 节点的输出正确接到了"发送月报"工具的 `data` 参数
+- 确认图表服务器正常返回了 `charts` 字段
 
-**Q: 想改图表/邮件样式？**
-- HTML 样式 → `plugin_official_src/tools/report_render.py`，改完重新打包插件
-- 折线图/条形图样式 → `standalone_server/charts.py`，改完拷到服务器替换 + 重启
-- ⚠️ 别改图表的 cid 名（`chart_cpu` 等），HTML 引用按这个名字找图
+**Q: 图表服务返回 401？**
+- 确认 Dify HTTP 节点加了 `Authorization` Header
+- 确认 key 和服务器 `CHART_API_KEY` 一致
+
+**Q: 插件装不上 / 签名报错？**
+- Dify 设置 → 生成插件私钥 → `dify-plugin plugin package -p plugin_official_src -k key.pem`
+- 用签名后的包重新上传
+
+**Q: 邮件里图表大小/颜色不对？**
+- 改 `tools/charts.py` → 重新打包插件 + 同步 `standalone_server/charts.py`
+- 改 `tools/report_render.py` → 重新打包插件
+
+**Q: 只想改邮件宽度/卡片样式？**
+- 改 `tools/report_render.py` 里的 `width` 值，重新打包插件即可，不需要动图表服务

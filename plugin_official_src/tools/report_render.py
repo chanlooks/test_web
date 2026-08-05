@@ -44,17 +44,21 @@ def clamp_pct(p):
     return max(0.0, min(100.0, p))
 
 
-def stat_card(tag, num, unit, sub='', high=False, note=''):
+def stat_card(tag, num, unit, sub='', high=False, note='', compact=False):
     top = '#c05621' if high else '#2c5282'
     num_color = '#c05621' if high else '#1a365d'
-    note_html = f'<span style="font-size:10px;color:#c05621;font-weight:500"> {note}</span>' if note else ''
+    note_color = '#c05621' if high else '#718096'
+    note_html = f'<span style="font-size:10px;color:{note_color};font-weight:500"> {note}</span>' if note else ''
     sub_html = f'<div style="font-size:10px;color:#718096;margin-top:3px;line-height:1.5">{sub}</div>' if sub else ''
+    pad = '8px 4px' if compact else '12px 8px'
+    tag_fs = '10px' if compact else '11px'
+    num_fs = '20px' if compact else '22px'
     return (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
-        f'<tr><td style="background-color:#f8fafc;border-top:2px solid {top};padding:12px 8px;'
+        f'<tr><td style="background-color:#f8fafc;border-top:2px solid {top};padding:{pad};'
         f'text-align:center;font-family:{FONT}">'
-        f'<div style="font-size:11px;color:#718096">{tag}{note_html}</div>'
-        f'<div style="font-size:22px;font-weight:600;color:{num_color}">{num}'
+        f'<div style="font-size:{tag_fs};color:#718096">{tag}{note_html}</div>'
+        f'<div style="font-size:{num_fs};font-weight:600;color:{num_color}">{num}'
         f'<span style="font-size:12px;color:#718096;font-weight:400"> {unit}</span></div>{sub_html}'
         f'</td></tr></table>'
     )
@@ -223,17 +227,33 @@ def block_summary_risks(summary, risks):
 
 def block_computer_overview(period, cd):
     desc = f'截至 {period}，电脑资产总览 {cd.get("total", 0)} 台，活跃使用率 {fmt1(cd.get("rateUsageOverall", 0))}%'
+
+    # 可用电脑老旧资产计算（对齐浏览器版第5张卡）
+    avail_age = cd.get('availAge') or []
+    y4_total = sum(r.get('y4', 0) or 0 for r in avail_age)
+    avail_total = cd.get('availTotal', 0)
+    age_pct = (y4_total / avail_total * 100) if avail_total else 0
+    age_sub_parts = []
+    for r in avail_age:
+        name = r.get('name', '')
+        y4 = r.get('y4', 0) or 0
+        if y4 > 0 and name != '其他':
+            age_sub_parts.append(f'{name} {y4}')
+    age_sub = ' · '.join(age_sub_parts) if age_sub_parts else '暂无老旧可用库存'
+
     cards = [
         stat_card('电脑资产总览', cd.get('total', 0), '台',
-                  f'笔记本 {cd.get("laptopTotal", 0)} · 台式机 {cd.get("desktopTotal", 0)} · 瘦客户机 {cd.get("thinClientTotal", 0)}'),
+                  f'笔记本 {cd.get("laptopTotal", 0)} · 台式机 {cd.get("desktopTotal", 0)} · 瘦客户机 {cd.get("thinClientTotal", 0)}', compact=True),
         stat_card('领用数', cd.get('assignedTotal', 0), '台',
-                  f'笔记本 {cd.get("assignedLaptop", 0)} · 台式机 {cd.get("assignedDesktop", 0)} · 瘦客户机 {cd.get("assignedThinClient", 0)}'),
+                  f'笔记本 {cd.get("assignedLaptop", 0)} · 台式机 {cd.get("assignedDesktop", 0)} · 瘦客户机 {cd.get("assignedThinClient", 0)}', compact=True),
         stat_card('库存数', cd.get('inventoryTotal', 0), '台',
-                  f'可用 {cd.get("inventoryAvailable", 0)} · 预留 {cd.get("inventoryReserved", 0)} · 待报废 {cd.get("inventoryScrap", 0)}'),
+                  f'可用 {cd.get("inventoryAvailable", 0)} · 预留 {cd.get("inventoryReserved", 0)} · 待报废 {cd.get("inventoryScrap", 0)}', compact=True),
         stat_card('可用电脑', cd.get('availTotal', 0), '台',
-                  f'笔记本 {cd.get("availLaptop", 0)} · 台式机 {cd.get("availDesktop", 0)} · 瘦客户机 {cd.get("availThinClient", 0)}'),
+                  f'笔记本 {cd.get("availLaptop", 0)} · 台式机 {cd.get("availDesktop", 0)} · 瘦客户机 {cd.get("availThinClient", 0)}', compact=True),
+        stat_card('可用电脑老旧资产', y4_total, '台', age_sub, True, '≥4年', compact=True),
     ]
-    row = ''.join(f'<td width="25%" style="padding:6px">{c}</td>' for c in cards)
+    # 5 列布局（窄间距，防换行导致高度不一致）
+    row = ''.join(f'<td width="20%" style="padding:2px;vertical-align:top">{c}</td>' for c in cards)
     return (
         f'<tr><td style="padding:26px 32px 0;">{section_title("电脑资产概览", desc)}</td></tr>'
         f'<tr><td style="padding:12px 26px 0;">'
@@ -243,16 +263,32 @@ def block_computer_overview(period, cd):
 
 
 def block_computer_usage(cd):
+    """各类型电脑活跃使用率，对齐浏览器版 usage-cards 样式。"""
+    def _usage_card(title, sub, rate, high=False):
+        color = '#c05621' if high else '#2c5282'
+        return (
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
+            f'<tr><td style="background-color:#f8fafc;border:1px solid #dde1e8;padding:14px 12px;">'
+            f'<div style="font-size:13px;font-weight:600;color:#2d3748;margin-bottom:2px">{title}</div>'
+            f'<div style="font-size:11px;color:#718096;margin-bottom:10px">{sub}</div>'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">'
+            f'<tr><td style="border-top:1px solid #dde1e8;padding-top:8px;text-align:center">'
+            f'<div style="font-size:20px;font-weight:600;color:{color}">{fmt1(rate)}%</div>'
+            f'<div style="font-size:11px;color:#718096;margin-top:2px">活跃率</div>'
+            f'</td></tr></table>'
+            f'</td></tr></table>'
+        )
     cards = [
-        stat_card('笔记本', fmt1(cd.get('rateUsageLaptop', 0)) + '%', '', '活跃使用率',
-                  (cd.get('rateUsageLaptop', 0) or 0) < 60),
-        stat_card('台式机', fmt1(cd.get('rateUsageDesktop', 0)) + '%', '', '活跃使用率',
-                  (cd.get('rateUsageDesktop', 0) or 0) < 60),
-        stat_card('整体活跃使用率', fmt1(cd.get('rateUsageOverall', 0)) + '%', '',
-                  f'{cd.get("usageAssignedTotal", 0)} 台 / {cd.get("total", 0)} 台',
-                  (cd.get('rateUsageOverall', 0) or 0) < 60),
+        _usage_card('笔记本', '活跃使用率', cd.get('rateUsageLaptop', 0),
+                    (cd.get('rateUsageLaptop', 0) or 0) < 60),
+        _usage_card('台式机', '活跃使用率', cd.get('rateUsageDesktop', 0),
+                    (cd.get('rateUsageDesktop', 0) or 0) < 60),
+        _usage_card('整体活跃使用率',
+                    f'{cd.get("onlineTotal", 0)} / {cd.get("usageAssignedTotal", 0)} 台',
+                    cd.get('rateUsageOverall', 0),
+                    (cd.get('rateUsageOverall', 0) or 0) < 60),
     ]
-    row = ''.join(f'<td width="33%" style="padding:6px">{c}</td>' for c in cards)
+    row = ''.join(f'<td width="33%" style="padding:6px;vertical-align:top">{c}</td>' for c in cards)
     return (
         f'<tr><td style="padding:24px 32px 0;">{section_title("各类型电脑活跃使用率", "近1个月有使用的已领用电脑占比")}</td></tr>'
         f'<tr><td style="padding:12px 26px 0;">'
@@ -518,8 +554,8 @@ def render(data):
         '<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'<title>IT 基础设施资源月报 - {period}</title>\n</head>\n'
         f'<body style="margin:0;padding:24px 0 40px;background-color:#eef1f5;font-family:{FONT};">\n'
-        f'<table width="680" cellpadding="0" cellspacing="0" border="0" align="center" '
-        f'style="border-collapse:collapse;background-color:#ffffff;width:680px;max-width:100%">\n'
+        f'<table width="960" cellpadding="0" cellspacing="0" border="0" align="center" '
+        f'style="border-collapse:collapse;background-color:#ffffff;width:960px;max-width:100%">\n'
         f'{"\n".join(parts)}\n'
         '</table>\n</body>\n</html>\n'
     )

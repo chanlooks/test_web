@@ -58,14 +58,15 @@ def _smooth(points, tension=0.3, samples=16):
     """Catmull-Rom 平滑曲线（对齐原版 Chart.js tension:0.3）。"""
     if len(points) < 3:
         return points
-    out = []
+    # Catmull-Rom 在 u=0 时给出 p1 而非 p0，因此显式保留首点
+    out = [points[0]]
     for i in range(len(points) - 1):
         p0 = points[max(i - 1, 0)]
         p1 = points[i]
         p2 = points[i + 1]
         p3 = points[min(i + 2, len(points) - 1)]
-        k = tension
-        for t in range(samples):
+        # t 从 1 到 samples，避免 u=0（即 p1，已被上一段覆盖）并到达 u=1（精确 p2）
+        for t in range(1, samples + 1):
             u = t / samples
             u2 = u * u
             u3 = u2 * u
@@ -76,7 +77,7 @@ def _smooth(points, tension=0.3, samples=16):
                  (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * u2 +
                  (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * u3) * 0.5
             out.append((x, y))
-    out.append(points[-1])
+    # 最后一段的 u=1 已精确到达 points[-1]，无需再 append
     return out
 
 
@@ -84,19 +85,18 @@ def _line_chart(title, x_labels, series, y_min, y_max, y_unit="",
                 data_labels=False, legend=False, half=False, w=920, x_step=1, x_angle=0,
                 tick_step=None):
     """series: [(名称, 颜色RGB, [数值], 是否虚线), ...]
-    初始清晰样式：直线、粗线条、大点、图例右上角。
-    w: 画布宽度；x_step: x 标签隔几个显示；x_angle: 标签倾斜角度；tick_step: y 刻度步长。"""
+    高分辨率渲染：画布加大、线条加粗、字体放大，保证清晰度。"""
     if half:
-        W, H = 640, 480
-        ML, MR, MT, MB = 58, 20, 30, 48
-        F = dict(title=0, tick=20, xl=22, lg=22, dl=22)  # title=0 表示不画内部标题（外层已有小标题）
+        W, H = 800, 560
+        ML, MR, MT, MB = 72, 24, 36, 56
+        F = dict(title=0, tick=24, xl=26, lg=26, dl=24)  # title=0 表示不画内部标题
     else:
-        W, H = w, 430
-        s = w / 920.0
-        ML, MR, MT, MB = int(66 * s), int(24 * s), int(42 * s), int(46 * s)
+        W, H = w, 500
+        s = w / 1100.0
+        ML, MR, MT, MB = int(78 * s), int(28 * s), int(48 * s), int(52 * s)
         if x_angle:
-            MB += 34  # 倾斜标签需要更多底部空间
-        F = dict(title=int(26 * s), tick=int(17 * s), xl=int(18 * s), lg=int(19 * s), dl=int(18 * s))
+            MB += 40  # 倾斜标签需要更多底部空间
+        F = dict(title=int(30 * s), tick=int(20 * s), xl=int(22 * s), lg=int(22 * s), dl=int(20 * s))
 
     img = Image.new("RGB", (W, H), "white")
     d = ImageDraw.Draw(img)
@@ -154,35 +154,61 @@ def _line_chart(title, x_labels, series, y_min, y_max, y_unit="",
             tw = d.textlength(lab, font=xl_font)
             d.text((x - tw / 2, y1 + 8), lab, font=xl_font, fill=_PAL["muted"])
 
-    # 各条线（直线、粗、大点，最初始清晰样式）
-    for name, color, values, dashed in series:
+    # 各条线：平滑曲线 + 加粗线条 + 清晰数据点
+    for entry in series:
+        name, color, values = entry[0], entry[1], entry[2]
+        dashed = entry[3] if len(entry) > 3 else False
+        fill_color = entry[4] if len(entry) > 4 else None
         pts = [(x, py(v)) for x, v in zip(xs, values)]
-        if dashed:
-            _dashed_line(d, pts, color, 2)
-        else:
-            d.line(pts, fill=color, width=4, joint="curve")
-        r = 5
+
+        # 填充区域（在曲线下方与 x 轴之间）
+        if fill_color and len(pts) >= 2:
+            smooth_pts = _smooth(pts)
+            poly = list(smooth_pts) + [(x1, y1), (x0, y1)]
+            d.polygon(poly, fill=fill_color)
+
+        # 平滑曲线（粗线）
+        line_w = 3
+        dash_w = 2
+        if len(pts) >= 3:
+            smooth_pts = _smooth(pts)
+            if dashed:
+                _dashed_line(d, smooth_pts, color, dash_w)
+            else:
+                for i in range(len(smooth_pts) - 1):
+                    d.line([smooth_pts[i], smooth_pts[i + 1]], fill=color, width=line_w)
+        elif len(pts) == 2:
+            if dashed:
+                _dashed_line(d, pts, color, dash_w)
+            else:
+                d.line(pts, fill=color, width=line_w)
+
+        # 数据点（加粗圆点 + 白色描边）
+        r = 4
         for x, v in zip(xs, values):
-            d.ellipse((x - r, py(v) - r, x + r, py(v) + r), fill=color, outline="white")
+            yy_v = py(v)
+            d.ellipse((x - r, yy_v - r, x + r, yy_v + r), fill=color, outline="white")
 
     # 数据数值标注（每个点；白色描边避免被线条/点干扰；水平钳制避免撞 y 轴刻度）
     if data_labels:
-        for name, color, values, dashed in series:
+        for entry in series:
+            name, color, values = entry[0], entry[1], entry[2]
             for x, v in zip(xs, values):
                 yy = py(v)
                 lab = "%g" % v
                 tw = d.textlength(lab, font=dl_font)
                 lx = min(max(x, x0 + tw / 2), x1 - tw / 2)
                 for ox, oy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                    d.text((lx - tw / 2 + ox, yy - 22 + oy), lab, font=dl_font, fill="white")
-                d.text((lx - tw / 2, yy - 22), lab, font=dl_font, fill=_PAL["muted"])
+                    d.text((lx - tw / 2 + ox, yy - 20 + oy), lab, font=dl_font, fill="white")
+                d.text((lx - tw / 2, yy - 20), lab, font=dl_font, fill=_PAL["muted"])
 
     # 图例（右上角）
     if legend:
         lx = x1
-        for name, color, _, _ in reversed(series):
+        for entry in reversed(series):
+            name, color = entry[0], entry[1]
             tw = d.textlength(name, font=lg_font)
-            d.line((lx - tw - 34, y0 + 8, lx - tw - 8, y0 + 8), fill=color, width=4)
+            d.line((lx - tw - 34, y0 + 8, lx - tw - 8, y0 + 8), fill=color, width=5)
             d.text((lx - tw, y0 - 6), name, font=lg_font, fill=_PAL["primary"])
             lx -= (tw + 50)
 
@@ -305,7 +331,7 @@ def build_charts(data):
     mt = data.get("monthlyTrend") or []
     charts = []
 
-    # 1. 近一年电脑总数趋势（整行）
+    # 1. 近一年电脑总数趋势（整行，纯折线无填充）
     trend = cd.get("trend") or []
     if trend:
         x = [t.get("month", "") for t in trend]  # 保持 2025-08 格式
@@ -313,8 +339,9 @@ def build_charts(data):
         lo = 8400  # 对齐原版 y min:8400
         hi = 9600  # max 取 nice 值（原版自动，此处用 9600）
         charts.append(("chart_computer", _line_chart(
-            "近一年电脑总数趋势", x, [("电脑总数", _PAL["accent"], y, False)],
-            lo, hi, "台", data_labels=True, w=1150, x_angle=45), "png"))
+            "近一年电脑总数趋势", x,
+            [("电脑总数", _PAL["accent"], y, False)],
+            lo, hi, "台", data_labels=True, w=1380, x_angle=45), "png"))
 
     # 2. CPU 占用走势（并排半宽）
     if mt:
@@ -334,79 +361,96 @@ def build_charts(data):
              ("整体内存", _PAL["warn"], [m.get("physMem", 0) for m in mt], False)],
             0, 80, "%", legend=True, half=True, tick_step=20, data_labels=True), "png"))
 
-    # 4. 存储剩余空间（整行）
+    # 4. 存储剩余空间（整行，纯折线无填充）
     if mt:
         x = [m.get("month", "") for m in mt]
         y = [m.get("storageFree", 0) for m in mt]
         lo = int(min(y) / 50) * 50
         hi = int((max(y) + 60) / 50) * 50
         charts.append(("chart_storage", _line_chart(
-            "存储剩余空间", x, [("剩余TB", _PAL["primary"], y, False)],
+            "存储剩余空间", x,
+            [("剩余TB", _PAL["primary"], y, False)],
             lo, hi, "TB", data_labels=True), "png"))
 
-    # ---- 条形图：同一栏两张图等高（以行数多的那张为准）----
-    ROW = 34
-    _age_n = len(cd.get("deptAge") or [])
-    _fac_n = len(cd.get("factoryAvail") or [])
-    _sec1_h = 40 + _age_n * ROW + 76 if _age_n else 0
-    _sec2_h = 40 + _fac_n * ROW + 76 if _fac_n else 0
+    # ---- 条形图：先收集数据，再按同一排最大行数统一高度 ----
+    ROW_1 = 50  # 一级部门（行少，用大行高）
+    ROW_2 = 20  # 一人多台/厂区（行多，用小行高，避免图太高）
 
-    # 5. 部门活跃使用率（单色柱，低于均值；区间 0-100 间隔 20）
+    # 5. 准备 dept_adoption 数据
     dept_usage = cd.get("deptUsage") or []
-    if dept_usage:
-        rates = [d.get("rate", 0) or 0 for d in dept_usage]
-        avg = sum(rates) / len(rates)
-        data = sorted([d for d in dept_usage if (d.get("rate", 0) or 0) < avg],
-                      key=lambda d: d.get("rate", 0), reverse=True)
-        cats = [d.get("dept", "") for d in data]
-        vals = [d.get("rate", 0) for d in data]
-        charts.append(("chart_dept_adoption", _hbar_chart(
-            "部门活跃使用率（%）", cats, vals, [_PAL["accent"]], 100, "%",
-            bar_mode="single", tick_step=20,
-            row_h=(_sec1_h - 40 - 46) // len(data) if _sec1_h and len(data) else ROW), "png"))
+    adoption_data = []
+    overall = cd.get("rateUsageOverall", 0) or 0
+    if dept_usage and overall:
+        adoption_data = sorted([d for d in dept_usage if (d.get("rate", 0) or 0) < overall],
+                               key=lambda d: d.get("rate", 0), reverse=True)
 
-    # 6. 部门电脑使用年限（4 段堆叠；区间 0-1400 间隔 200）
+    # 6. 准备 dept_age 数据
+    AGE_KEYS = ["y3", "y4"]
+    AGE_COLORS = [_GOLD, _PAL["warn"]]
     dept_age = cd.get("deptAge") or []
-    if dept_age:
-        AGE_KEYS = ["y1", "y2", "y3", "y4"]
-        AGE_COLORS = [_PAL["green"], _PAL["accent"], _GOLD, _PAL["warn"]]
-        data = sorted(dept_age,
-                      key=lambda d: sum(d.get(k, 0) or 0 for k in AGE_KEYS), reverse=True)
-        cats = [d.get("dept", "") for d in data]
-        series = [[d.get(k, 0) or 0 for k in AGE_KEYS] for d in data]
-        charts.append(("chart_dept_age", _hbar_chart(
-            "部门电脑使用年限分布（台）", cats, series, AGE_COLORS, 1400, "",
-            bar_mode="stacked", tick_step=200, row_h=ROW,
-            legend_items=[("1年", AGE_COLORS[0]), ("2年", AGE_COLORS[1]),
-                          ("3年", AGE_COLORS[2]), ("4年+", AGE_COLORS[3])]), "png"))
+    age_data = sorted(dept_age, key=lambda d: sum(d.get(k, 0) or 0 for k in AGE_KEYS), reverse=True)[:10] if dept_age else []
 
-    # 7. 一人多台（3 组分组柱；区间 0-100 间隔 20）
+    # 7. 准备 multi_device 数据
+    M_KEYS = ["two", "three", "threePlus"]
+    M_COLORS = [_PAL["accent"], _GOLD, _PAL["warn"]]
     multi = cd.get("multiDevice") or []
-    if multi:
-        M_KEYS = ["two", "three", "threePlus"]
-        M_COLORS = [_PAL["accent"], _GOLD, _PAL["warn"]]
-        data = sorted(multi,
-                      key=lambda d: sum(d.get(k, 0) or 0 for k in M_KEYS), reverse=True)
-        cats = [d.get("dept", "") for d in data]
-        series = [[d.get(k, 0) or 0 for k in M_KEYS] for d in data]
+    multi_data = sorted(multi, key=lambda d: sum(d.get(k, 0) or 0 for k in M_KEYS), reverse=True) if multi else []
+
+    # 8. 准备 factory_avail 数据
+    F_KEYS = ["laptop", "desktop", "thin"]
+    F_COLORS = [_PAL["accent"], _PAL["green"], _GOLD]
+    factory = cd.get("factoryAvail") or []
+    factory_data = sorted(factory, key=lambda d: sum(d.get(k, 0) or 0 for k in F_KEYS), reverse=True) if factory else []
+
+    # 同一排图表统一高度：行多的用基准行高，行少的按比例加大
+    sec1_rows = max(len(adoption_data), len(age_data), 1)
+    sec2_rows = max(len(multi_data), len(factory_data), 1)
+
+    # 5. 部门活跃使用率（与右图 age 同高）
+    if adoption_data:
+        cats = [d.get("dept", "") for d in adoption_data]
+        vals = [d.get("rate", 0) for d in adoption_data]
+        ov = float(overall)
+        ov_str = str(int(ov)) if ov == int(ov) else ('%.1f' % ov).rstrip('0').rstrip('.')
+        label_text = "活跃使用率（低于整体 %s%%）" % ov_str
+        row_h1 = int(sec1_rows * ROW_1 / len(adoption_data))
+        charts.append(("chart_dept_adoption", _hbar_chart(
+            "部门活跃使用率（低于整体活跃使用率）", cats, vals, [_PAL["accent"]], 100, "%",
+            bar_mode="single", tick_step=20, row_h=row_h1,
+            legend_items=[(label_text, _PAL["accent"])]), "png"))
+
+    # 6. 部门电脑使用年限（与左图 adoption 同高）
+    if age_data:
+        cats = [d.get("dept", "") for d in age_data]
+        series = [[d.get(k, 0) or 0 for k in AGE_KEYS] for d in age_data]
+        max_val = max((max(s) for s in series), default=1000)
+        x_max = int((max_val + 99) / 100) * 100
+        row_h1 = int(sec1_rows * ROW_1 / len(age_data))
+        charts.append(("chart_dept_age", _hbar_chart(
+            "部门电脑使用年限分布（3年及以上 · 总量 Top 10）", cats, series, AGE_COLORS, x_max, "",
+            bar_mode="grouped", tick_step=100, row_h=row_h1,
+            legend_items=[("3年", AGE_COLORS[0]), ("4年+", AGE_COLORS[1])]), "png"))
+
+    # 7. 一人多台（与右图 factory 同高）
+    if multi_data:
+        cats = [d.get("dept", "") for d in multi_data]
+        series = [[d.get(k, 0) or 0 for k in M_KEYS] for d in multi_data]
+        row_h2 = int(sec2_rows * ROW_2 / len(multi_data))
         charts.append(("chart_multi", _hbar_chart(
             "一人多台（台）", cats, series, M_COLORS, 100, "",
-            bar_mode="grouped", tick_step=20,
-            row_h=(_sec2_h - 40 - 76) // len(multi) if _sec2_h and len(multi) else ROW,
+            bar_mode="grouped", tick_step=20, row_h=row_h2,
             legend_items=[("2台", M_COLORS[0]), ("3台", M_COLORS[1]), ("3台+", M_COLORS[2])]), "png"))
 
-    # 8. 厂区可用电脑（3 段堆叠；区间 0-400 间隔 50）
-    factory = cd.get("factoryAvail") or []
-    if factory:
-        F_KEYS = ["laptop", "desktop", "thin"]
-        F_COLORS = [_PAL["accent"], _PAL["green"], _GOLD]
-        data = sorted(factory,
-                      key=lambda d: sum(d.get(k, 0) or 0 for k in F_KEYS), reverse=True)
-        cats = [d.get("name", "") for d in data]
-        series = [[d.get(k, 0) or 0 for k in F_KEYS] for d in data]
+    # 8. 厂区可用电脑（与左图 multi 同高）
+    if factory_data:
+        cats = [d.get("name", "") for d in factory_data]
+        series = [[d.get(k, 0) or 0 for k in F_KEYS] for d in factory_data]
+        max_val = max((max(s) for s in series), default=400)
+        x_max = int((max_val + 49) / 50) * 50
+        row_h2 = int(sec2_rows * ROW_2 / len(factory_data))
         charts.append(("chart_factory", _hbar_chart(
-            "各厂区可用电脑库存（台）", cats, series, F_COLORS, 400, "",
-            bar_mode="stacked", tick_step=50, row_h=ROW,
+            "各厂区可用电脑库存（台）", cats, series, F_COLORS, x_max, "",
+            bar_mode="grouped", tick_step=50, row_h=row_h2,
             legend_items=[("笔记本", F_COLORS[0]), ("台式机", F_COLORS[1]),
                           ("瘦客户机", F_COLORS[2])]), "png"))
 
